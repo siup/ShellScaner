@@ -215,6 +215,7 @@ export function SerialScanner({
         <PhotoPicker
           file={photo}
           kind={kind}
+          history={sets.flatMap((s) => s.shells.map((sh) => (kind === 'prefab' ? sh.prefabSerial : sh.shellSerial)))}
           onCancel={() => setPhoto(null)}
           onManual={() => {
             setPhoto(null)

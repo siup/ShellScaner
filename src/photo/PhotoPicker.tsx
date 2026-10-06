@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import type { InputMethod, SerialKind } from '../lib/types'
-import { findBarcodes, findNumbers, loadPhoto, readAround, type PhotoHit } from './analyze'
+import { findBarcodes, findNumbers, loadPhoto, readAround, suggestFromHistory, type PhotoHit } from './analyze'
 
 type Status = 'loading' | 'reading' | 'ready' | 'error'
 
@@ -11,12 +11,15 @@ type Status = 'loading' | 'reading' | 'ready' | 'error'
 export function PhotoPicker({
   file,
   kind,
+  history,
   onPick,
   onCancel,
   onManual,
 }: {
   file: File
   kind: SerialKind
+  /** Serials of this kind saved earlier, used to guess which number is the right one. */
+  history: string[]
   onPick: (value: string, method: InputMethod) => void
   onCancel: () => void
   onManual: () => void
@@ -43,10 +46,20 @@ export function PhotoPicker({
         setStatus('reading')
         // barcodes (worker) and text (OCR worker) run in parallel; whatever
         // finishes first is shown right away
+        // a barcode beats the same number read as text (exact, no OCR doubt)
         const merge = (more: PhotoHit[]) =>
-          setHits((prev) => [...prev, ...more.filter((m) => !prev.some((p) => p.value === m.value))])
-        const codes = findBarcodes(c).then((r) => !cancelled && merge(r), () => undefined)
-        const numbers = findNumbers(c, kind).then((r) => !cancelled && merge(r), () => undefined)
+          !cancelled &&
+          setHits((prev) => {
+            const next = [...prev]
+            for (const m of more) {
+              const i = next.findIndex((p) => p.value === m.value)
+              if (i < 0) next.push(m)
+              else if (m.method === 'barcode' && next[i].method !== 'barcode') next[i] = { ...m, suggested: next[i].suggested }
+            }
+            return next
+          })
+        const codes = findBarcodes(c, merge).then(merge, () => undefined)
+        const numbers = findNumbers(c, kind).then(merge, () => undefined)
         await Promise.all([codes, numbers])
         if (cancelled) return
         setStatus('ready')
@@ -87,6 +100,7 @@ export function PhotoPicker({
   }
 
   const pct = (v: number, total: number) => `${(v / total) * 100}%`
+  const shown = suggestFromHistory(hits, history)
 
   return (
     <div className="photo-screen">
@@ -108,7 +122,7 @@ export function PhotoPicker({
         {url && canvas && (
           <div className="photo-wrap" onClick={(e) => void onImageTap(e)}>
             <img ref={imgRef} src={url} alt="" className="photo-img" draggable={false} />
-            {hits.map((h, i) => (
+            {shown.map((h, i) => (
               <button
                 key={`${h.value}-${i}`}
                 type="button"
@@ -138,10 +152,14 @@ export function PhotoPicker({
       </div>
 
       <div className="photo-bottom">
-        {hits.length > 0 && (
+        {shown.length > 0 && (
           <div className="photo-choices">
             {[...new Map(
-              [...hits].sort((a, b) => Number(!!b.suggested) - Number(!!a.suggested)).map((h) => [h.value, h]),
+              [...shown].sort(
+                (a, b) =>
+                  Number(!!b.suggested) - Number(!!a.suggested) ||
+                  Number(b.method === 'barcode') - Number(a.method === 'barcode'),
+              ).map((h) => [h.value, h]),
             ).values()].map((h) => (
               <button
                 key={h.value}

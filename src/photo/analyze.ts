@@ -121,9 +121,14 @@ async function ocrPass(canvas: HTMLCanvasElement, maxSide: number, filter: strin
 }
 
 /** Step 1 (fast): every barcode on the photo. */
-export async function findBarcodes(canvas: HTMLCanvasElement): Promise<PhotoHit[]> {
-  const barcodes = await detectBarcodesInImage(canvas, scanConfig.formats)
-  return barcodes.map((b) => ({ value: b.value, method: 'barcode', box: b.box }))
+export async function findBarcodes(
+  canvas: HTMLCanvasElement,
+  onProgress?: (hits: PhotoHit[]) => void,
+): Promise<PhotoHit[]> {
+  const toHits = (codes: { value: string; box: Rect }[]): PhotoHit[] =>
+    codes.map((b) => ({ value: b.value, method: 'barcode', box: b.box }))
+  const barcodes = await detectBarcodesInImage(canvas, scanConfig.formats, false, (c) => onProgress?.(toHits(c)))
+  return toHits(barcodes)
 }
 
 /** Step 2 (slower): number-like words, with the anchored one marked as suggested. */
@@ -202,4 +207,26 @@ async function textAround(canvas: HTMLCanvasElement, p: Point): Promise<PhotoHit
   return [...votes.values()]
     .sort((a, b) => b.n - a.n || b.hit.value.length - a.hit.value.length)
     .map((v) => v.hit)
+}
+
+/** Drops OCR reads that are just a cut-off piece of a barcode value (e.g. "9464704" of "29464704"). */
+function withoutFragments(hits: PhotoHit[]): PhotoHit[] {
+  const codes = hits.filter((h) => h.method === 'barcode').map((h) => h.value)
+  return hits.filter((h) => h.method === 'barcode' || !codes.some((c) => c !== h.value && c.includes(h.value)))
+}
+
+/**
+ * When nothing is suggested from the label text, use what was saved before:
+ * a hit with the same length and first 3 digits as earlier serials of this
+ * kind (prefabs here look like 136xxxxx, material numbers like 2946xxxx).
+ * Only an unambiguous match is suggested.
+ */
+export function suggestFromHistory(hits: PhotoHit[], history: string[]): PhotoHit[] {
+  hits = withoutFragments(hits)
+  if (hits.some((h) => h.suggested) || history.length === 0) return hits
+  const shapes = new Set(history.map((v) => `${v.length}:${v.slice(0, 3)}`))
+  const matching = new Set(hits.filter((h) => shapes.has(`${h.value.length}:${h.value.slice(0, 3)}`)).map((h) => h.value))
+  if (matching.size !== 1) return hits
+  const [value] = matching
+  return hits.map((h) => (h.value === value ? { ...h, suggested: true } : h))
 }
