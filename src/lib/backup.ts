@@ -19,7 +19,7 @@ export function backupToJson(sets: ShellSet[]): string {
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string'
-const isMethod = (v: unknown): v is InputMethod => v === 'barcode' || v === 'manual'
+const isMethod = (v: unknown): v is InputMethod => v === 'barcode' || v === 'manual' || v === 'ocr'
 
 function parseShell(raw: unknown, idx: number): ShellItem {
   const s = raw as Record<string, unknown>

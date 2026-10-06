@@ -34,6 +34,19 @@ Nowa wersja wrzucona na serwer zainstaluje się sama przy następnym uruchomieni
 
 Obsługiwane formaty: Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E, ITF.
 
+## OCR, zdjęcie i latarka
+
+Na ekranie skanowania są przyciski:
+
+- **Enter manually** otwiera klawiaturę numeryczną. Przycisk ABC przełącza na litery, gdyby format numerów się zmienił.
+- **Read text** przełącza skaner na OCR. Wtedy w celownik łapie się wiersz z numerem (dla prefabu "Production Order"), a nie barcode. Odczytany numer zawsze trzeba potwierdzić, bo OCR potrafi pomylić cyfry. Wybrany tryb zapamiętuje się osobno dla prefabu i shella.
+- **Photo** pozwala zrobić albo wybrać zdjęcie. Aplikacja szuka na nim kodów kreskowych i numerów, zaznacza je ramkami i pokazuje listę pod zdjęciem. Numer z wiersza "Production Order" jest oznaczony jako Suggested. Jeśli czegoś nie znalazła, stuknij palcem w numer na zdjęciu, wtedy OCR czyta powiększony fragment wokół palca.
+- **Light** włącza latarkę. Jeśli telefon albo przeglądarka nie pozwala nią sterować, pojawi się komunikat. Na iPhonie Safari nie daje dostępu do latarki.
+
+Numery z OCR mają w danych `inputMethod: ocr`.
+
+OCR to Tesseract.js z angielskim modelem. Pliki (silnik ok. 4 MB, model ok. 3 MB) są kopiowane z `node_modules` do `public/ocr` przy `npm run dev` / `npm run build` i trafiają do cache service workera. OCR działa więc offline, a zdjęcia nigdzie nie wychodzą. Pierwsze uruchomienie aplikacji pobiera przez to ok. 8 MB.
+
 ## Konfiguracja (`src/config.ts`)
 
 Gdy będzie wiadomo, jakiego dokładnie kodu używa produkcja, można:
@@ -49,6 +62,8 @@ rules: {
 ```
 
 Reguła może też mieć `formats`, żeby np. prefab był akceptowany tylko z Code 128. Tam są też czasy: `stableMs`, `minHits`, `advanceDelayMs`.
+
+Sekcja `ocr` mówi, jak wyciągnąć numer z tekstu: `anchor` to słowo obok numeru na etykiecie ("Production Order"), `skip` to wiersze do pominięcia (Item Number, data), `pattern` to dopuszczalny format numeru.
 
 ## Testowanie bez kamery
 

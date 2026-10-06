@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { scanConfig, type BarcodeFormatName } from '../config'
+import { createOcrDetector } from '../ocr/detector'
+import type { SerialKind } from '../lib/types'
 import { createDetector, type FrameDetector } from './detectors'
 import { elementRectToVideo } from './geometry'
 import { StabilityFilter } from './stability'
 import { useCamera } from './useCamera'
+import { Icon } from '../components/Icon'
 
 export interface CameraScannerProps {
   title: string
@@ -21,7 +24,13 @@ export interface CameraScannerProps {
   message?: string | null
   header?: ReactNode
   actions?: ReactNode
+  /** Small secondary buttons shown above the toolbar. */
+  extras?: ReactNode
   formats?: BarcodeFormatName[]
+  /** 'ocr' reads printed text in the reticle instead of a barcode. */
+  engine?: 'barcode' | 'ocr'
+  /** Which OCR rule set to use (prefab / shell). */
+  ocrKind?: SerialKind
 }
 
 const IGNORE_CLEAR_MS = 1500
@@ -35,13 +44,18 @@ export function CameraScanner({
   message,
   header,
   actions,
+  extras,
   formats = scanConfig.formats,
+  engine = 'barcode',
+  ocrKind = 'prefab',
 }: CameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const reticleRef = useRef<HTMLDivElement>(null)
   const camera = useCamera(videoRef)
   const [detector, setDetector] = useState<FrameDetector | null>(null)
+  const [detectorError, setDetectorError] = useState<string | null>(null)
   const [locking, setLocking] = useState(false)
+  const [torchNote, setTorchNote] = useState<string | null>(null)
   const onScanRef = useRef(onScan)
   const ignoredRef = useRef<{ value: string; lastSeen: number } | null>(null)
 
@@ -50,20 +64,38 @@ export function CameraScanner({
   }, [onScan])
 
   const formatsKey = formats.join(',')
+  const detectorKey = engine === 'ocr' ? `ocr:${ocrKind}` : `barcode:${formatsKey}`
   useEffect(() => {
     let cancelled = false
-    void createDetector(formatsKey.split(',') as BarcodeFormatName[]).then((d) => {
-      if (!cancelled) setDetector(d)
-    })
+    const [kind, arg] = detectorKey.split(':')
+    const make =
+      kind === 'ocr'
+        ? createOcrDetector(arg as SerialKind)
+        : createDetector(arg.split(',') as BarcodeFormatName[])
+    make.then(
+      (d) => {
+        if (cancelled) return
+        setDetector(d)
+        setDetectorError(null)
+      },
+      () => {
+        if (!cancelled) setDetectorError('Could not load text recognition')
+      },
+    )
     return () => {
       cancelled = true
+      setDetector(null)
     }
-  }, [formatsKey])
+  }, [detectorKey])
 
   useEffect(() => {
     if (!active || camera.status !== 'ready' || !detector) return
     let stopped = false
-    const filter = new StabilityFilter(scanConfig.stableMs, scanConfig.minHits)
+    // OCR runs at ~1-2 reads/s, so it needs equal reads in a row rather than a time window
+    const filter =
+      detector.name === 'ocr'
+        ? new StabilityFilter(0, scanConfig.ocr.minHits, 5000)
+        : new StabilityFilter(scanConfig.stableMs, scanConfig.minHits)
     // restart the "left the reticle" clock, dialogs may have been open for a while
     if (ignoredRef.current) ignoredRef.current.lastSeen = performance.now()
     let wasLocking = false
@@ -142,18 +174,29 @@ export function CameraScanner({
           </div>
         ) : (
           <div className="scanner-hint">
-            {camera.status === 'error' ? camera.error : message ?? hint}
+            {camera.status === 'error'
+              ? camera.error
+              : (torchNote ??
+                message ??
+                detectorError ??
+                (engine === 'ocr' && !detector ? 'Loading text recognition…' : hint))}
           </div>
         )}
+        {extras && <div className="scanner-extras">{extras}</div>}
         <div className="scanner-actions">
           {actions}
-          {camera.torchSupported && (
+          {camera.status === 'ready' && (
             <button
               type="button"
-              className={camera.torchOn ? 'btn btn-torch on' : 'btn btn-torch'}
-              onClick={() => void camera.toggleTorch()}
+              className={camera.torchOn ? 'tool torch on' : 'tool torch'}
+              onClick={async () => {
+                const ok = await camera.toggleTorch()
+                setTorchNote(ok ? null : 'Light is not available on this phone / browser')
+                if (!ok) setTimeout(() => setTorchNote(null), 3000)
+              }}
             >
-              Torch
+              <Icon name="flash" />
+              <span>{camera.torchOn ? 'Light on' : 'Light'}</span>
             </button>
           )}
         </div>

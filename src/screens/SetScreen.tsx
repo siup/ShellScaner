@@ -3,6 +3,7 @@ import { CompleteSetDialog } from '../components/CompleteSetDialog'
 import { DuplicateWarning } from '../components/DuplicateWarning'
 import { ManualEntry } from '../components/ManualEntry'
 import { Confirm, Modal } from '../components/Modal'
+import { Icon } from '../components/Icon'
 import { TopBar } from '../components/TopBar'
 import { setsToCsv, safeFileName } from '../lib/csv'
 import { completeSet, findDuplicates, removeShell, updateShellSerial } from '../lib/sets'
@@ -45,51 +46,72 @@ export function SetScreen({ set, store, nav }: ScreenProps & { set: ShellSet }) 
         ? [count + 1]
         : []
 
+  const pctDone = expected ? Math.min(100, (count / expected) * 100) : 0
+
   return (
     <div className="screen">
       <TopBar title={set.name} onBack={nav.back} />
-      <div className="set-summary">
-        <div className="progress-text">
-          {expected !== undefined
-            ? `${count} / ${expected} shells completed`
-            : `${count} ${count === 1 ? 'shell' : 'shells'} added`}
+      <div className="summary-card">
+        <div className="summary-top">
+          <div className="progress-text">
+            {expected !== undefined ? (
+              <>
+                <span className="big-num">{count}</span>
+                <span className="muted"> / {expected} shells completed</span>
+              </>
+            ) : (
+              <>
+                <span className="big-num">{count}</span>
+                <span className="muted"> {count === 1 ? 'shell' : 'shells'} added</span>
+              </>
+            )}
+          </div>
+          <span className={done ? 'pill done' : 'pill open'}>{done ? 'Completed' : 'In progress'}</span>
         </div>
-        <div className={done ? 'status done' : 'status open'}>{done ? 'Completed' : 'In progress'}</div>
+        {expected !== undefined && (
+          <div className="progress">
+            <div className="progress-fill" style={{ width: `${pctDone}%` }} />
+          </div>
+        )}
       </div>
 
-      <ul className="shell-list">
+      <div className="group">
         {set.shells.map((s) => (
-          <li key={s.id}>
-            <button type="button" className="shell-row" onClick={() => setDialog({ type: 'shell', shell: s })}>
-              <span className="mark ok">✓</span>
-              <span className="shell-row-main">
-                <b>Shell {s.position}</b>
-                <span className="mono">
-                  Prefab {s.prefabSerial}
-                  {s.prefabInputMethod === 'manual' && <em className="tag">manual</em>}
-                </span>
-                <span className="mono">
-                  Shell {s.shellSerial}
-                  {s.shellInputMethod === 'manual' && <em className="tag">manual</em>}
-                </span>
+          <button key={s.id} type="button" className="shell-row" onClick={() => setDialog({ type: 'shell', shell: s })}>
+            <span className="mark ok">
+              <Icon name="check" size={16} />
+            </span>
+            <span className="shell-row-main">
+              <b>Shell {s.position}</b>
+              <span className="pair-line">
+                <span className="muted">Prefab</span>
+                <span className="mono">{s.prefabSerial}</span>
+                {s.prefabInputMethod !== 'barcode' && <em className="tag">{s.prefabInputMethod}</em>}
               </span>
-            </button>
-          </li>
+              <span className="pair-line">
+                <span className="muted">Shell</span>
+                <span className="mono">{s.shellSerial}</span>
+                {s.shellInputMethod !== 'barcode' && <em className="tag">{s.shellInputMethod}</em>}
+              </span>
+            </span>
+            <Icon name="chevron" size={18} />
+          </button>
         ))}
         {placeholders.map((p, i) => (
-          <li key={`p${p}`} className="shell-row placeholder">
-            <span className={i === 0 ? 'mark next' : 'mark'}>{i === 0 ? '●' : '○'}</span>
+          <div key={`p${p}`} className="shell-row placeholder">
+            <span className={i === 0 ? 'mark next' : 'mark'} />
             <span className="shell-row-main">
               <b>Shell {p}</b>
-              {i === 0 && <span className="muted">next</span>}
+              {i === 0 && <span className="muted small">next</span>}
             </span>
-          </li>
+          </div>
         ))}
-      </ul>
+      </div>
 
       <div className="bottom-actions">
         {!done && (
           <button type="button" className="btn btn-primary btn-xl" onClick={() => nav.push({ name: 'scan', id: set.id })}>
+            <Icon name="barcode" />
             {expected === undefined ? 'Add next shell' : count === 0 ? 'Start scanning' : 'Scan next shell'}
           </button>
         )}

@@ -110,8 +110,13 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
         const track = stream.getVideoTracks()[0]
         trackRef.current = track
         await enableAutofocus(track)
-        const caps = track.getCapabilities?.() as TorchCapabilities | undefined
-        setTorchSupported(!!caps?.torch)
+        const checkTorch = () => {
+          const caps = track.getCapabilities?.() as TorchCapabilities | undefined
+          if (!cancelled && caps?.torch) setTorchSupported(true)
+        }
+        checkTorch()
+        // some Android phones report the torch only once frames are flowing
+        setTimeout(checkTorch, 800)
 
         const video = videoRef.current
         if (!video) return
@@ -142,15 +147,20 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
     }
   }, [videoRef])
 
-  const toggleTorch = useCallback(async () => {
+  /** Returns false when the phone/browser does not let us control the light. */
+  const toggleTorch = useCallback(async (): Promise<boolean> => {
     const track = trackRef.current
-    if (!track) return
+    if (!track) return false
     const next = !torchOn
     try {
       await track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] })
+      const applied = (track.getSettings() as MediaTrackSettings & { torch?: boolean }).torch
+      if (applied !== undefined && applied !== next) return false
       setTorchOn(next)
+      setTorchSupported(true)
+      return true
     } catch {
-      setTorchSupported(false)
+      return false
     }
   }, [torchOn])
 

@@ -24,8 +24,8 @@ export default defineConfig({
         orientation: 'portrait',
         start_url: './',
         scope: './',
-        background_color: '#0b0f17',
-        theme_color: '#0b0f17',
+        background_color: '#f2f2f7',
+        theme_color: '#f2f2f7',
         icons: [
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -33,7 +33,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        // ocr/ holds the Tesseract engine (~4 MB) and English model (~3 MB)
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,gz}'],
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
       },

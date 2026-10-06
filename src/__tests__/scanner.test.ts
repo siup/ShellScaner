@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { checkRules, scanConfig, type ScanConfig } from '../config'
 import { elementRectToVideo } from '../scanner/geometry'
 import { pickCandidate } from '../scanner/pick'
+import { extractSerial } from '../ocr/extract'
 import { StabilityFilter } from '../scanner/stability'
 
 describe('StabilityFilter', () => {
@@ -114,5 +115,43 @@ describe('checkRules', () => {
     }
     expect(checkRules('shell', '839662', 'ean_8', cfg)).toBe('Wrong barcode type')
     expect(checkRules('shell', '839662', 'code_128', cfg)).toBeNull()
+  })
+})
+
+describe('extractSerial (OCR)', () => {
+  const prefab = scanConfig.ocr.prefab
+  const shell = scanConfig.ocr.shell
+
+  // real Tesseract output from a photo of a "V164_LEP PREFAB B1" label
+  it('takes the Production Order, not the Item Number', () => {
+    const text = [
+      '{ {TEM NUMBER _ 20464707 |',
+      'Production Order 13690706 ~~ -',
+      '|PRODUCTIONDATE | #/F 21°,',
+      'FACTORY MAL ¢',
+    ].join('\n')
+    expect(extractSerial(text, prefab)).toBe('13690706')
+  })
+
+  it('reads a single row crop', () => {
+    expect(extractSerial('> fa > — TU B ERT TNA ¥ SRR\n{ Production Order 13690706 ~~ - i', prefab)).toBe('13690706')
+  })
+
+  it('fixes typical O/I/S confusions inside numbers', () => {
+    expect(extractSerial('Production Order 1369O7O6', prefab)).toBe('13690706')
+    expect(extractSerial('Serial no.: 8396S2', shell)).toBe('839652')
+  })
+
+  it('without the anchor word takes the only number left', () => {
+    expect(extractSerial('| IEMNUMBER | 29464707\n13690706 ~~', prefab)).toBe('13690706')
+  })
+
+  it('refuses ambiguous reads', () => {
+    expect(extractSerial('13690706\n13690707', prefab)).toBeNull()
+    expect(extractSerial('nothing here', prefab)).toBeNull()
+  })
+
+  it('reads the shell serial print', () => {
+    expect(extractSerial('Serial no.: 839662', shell)).toBe('839662')
   })
 })

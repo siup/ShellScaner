@@ -8,16 +8,20 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "predev": "node scripts/copy-ocr.mjs",
+    "prebuild": "node scripts/copy-ocr.mjs"
   },
   "dependencies": {
     "@zxing/library": "^0.23.0",
     "idb": "^8.0.4",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

@@ -15,6 +15,8 @@ export function ManualEntry({
   onCancel: () => void
 }) {
   const [value, setValue] = useState(initial)
+  // serials are digits today; letters stay one tap away in case the format changes
+  const [letters, setLetters] = useState(/[^\d]/.test(initial))
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (value.trim()) onSubmit(value.trim())
@@ -23,18 +25,24 @@ export function ManualEntry({
     <Modal onClose={onCancel}>
       <form onSubmit={submit}>
         <h2 className="modal-title">{title}</h2>
-        <input
-          className="input input-big"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          autoFocus
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="characters"
-          spellCheck={false}
-          inputMode="text"
-          enterKeyHint="done"
-        />
+        <div className="input-row">
+          <input
+            key={letters ? 'text' : 'num'}
+            className="input input-big mono"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoFocus
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            inputMode={letters ? 'text' : 'numeric'}
+            enterKeyHint="done"
+          />
+          <button type="button" className="btn kb-toggle" onClick={() => setLetters((v) => !v)}>
+            {letters ? '123' : 'ABC'}
+          </button>
+        </div>
         <div className="modal-actions">
           <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
             {confirmLabel}

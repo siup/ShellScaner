@@ -25,6 +25,18 @@ export interface SerialRule {
   formats?: BarcodeFormatName[]
 }
 
+/**
+ * How a serial is picked out of OCR text. The anchor is a word printed next to
+ * the number on the label ("Production Order"); a number on that line wins.
+ * Without the anchor, lines matching `skip` are ignored and a number is taken
+ * only if exactly one candidate is left. Regexes are case-insensitive.
+ */
+export interface OcrRule {
+  pattern: string
+  anchor?: string
+  skip?: string
+}
+
 export interface ScanConfig {
   formats: BarcodeFormatName[]
   /** How long the same code must be read continuously before it is accepted. */
@@ -34,6 +46,10 @@ export interface ScanConfig {
   /** Delay after a good read before moving to the next step. */
   advanceDelayMs: number
   rules: Record<SerialKind, SerialRule[]>
+  ocr: Record<SerialKind, OcrRule> & {
+    /** OCR is slower, so a value must come out the same in this many reads in a row. */
+    minHits: number
+  }
 }
 
 export const scanConfig: ScanConfig = {
@@ -46,6 +62,13 @@ export const scanConfig: ScanConfig = {
     // prefab: [{ rejectPattern: '^2946\\d{4}$', message: 'This looks like a Material Number' }],
     prefab: [],
     shell: [],
+  },
+  ocr: {
+    minHits: 2,
+    // label row: "Production Order   13690706"; Item Number (material) is skipped
+    prefab: { pattern: '^\\d{6,12}$', anchor: 'prod|order', skip: 'item|number|matr|date' },
+    // shell print: "Serial no.: 839662"
+    shell: { pattern: '^\\d{5,12}$', anchor: 'serial', skip: 'date' },
   },
 }
 

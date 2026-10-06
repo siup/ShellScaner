@@ -1,4 +1,4 @@
-export type InputMethod = 'barcode' | 'manual'
+export type InputMethod = 'barcode' | 'manual' | 'ocr'
 export type SetStatus = 'in_progress' | 'completed'
 export type SerialKind = 'prefab' | 'shell'
 

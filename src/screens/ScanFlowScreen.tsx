@@ -82,13 +82,13 @@ export function ScanFlowScreen({ set, store, nav }: ScreenProps & { set: ShellSe
           step === 'shell' ? (
             <button
               type="button"
-              className="btn"
+              className="pill-btn"
               onClick={() => {
                 setPrefab(null)
                 setStep('prefab')
               }}
             >
-              Redo prefab
+              ↺ Redo prefab
             </button>
           ) : undefined
         }

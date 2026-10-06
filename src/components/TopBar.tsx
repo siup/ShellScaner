@@ -1,17 +1,30 @@
 import type { ReactNode } from 'react'
+import { Icon } from './Icon'
 
-export function TopBar({ title, onBack, right }: { title: ReactNode; onBack?: () => void; right?: ReactNode }) {
+/** iOS-style navigation bar: blurred, sticky, back button on the left. */
+export function TopBar({
+  title,
+  onBack,
+  backLabel = 'Back',
+  right,
+}: {
+  title: ReactNode
+  onBack?: () => void
+  backLabel?: string
+  right?: ReactNode
+}) {
   return (
     <header className="topbar">
-      {onBack ? (
-        <button type="button" className="icon-btn" onClick={onBack} aria-label="Back">
-          ‹
-        </button>
-      ) : (
-        <span className="icon-btn-spacer" />
-      )}
+      <div className="topbar-side">
+        {onBack && (
+          <button type="button" className="nav-back" onClick={onBack}>
+            <Icon name="back" size={24} />
+            <span>{backLabel}</span>
+          </button>
+        )}
+      </div>
       <h1 className="topbar-title">{title}</h1>
-      {right ?? <span className="icon-btn-spacer" />}
+      <div className="topbar-side right">{right}</div>
     </header>
   )
 }

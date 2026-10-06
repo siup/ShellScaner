@@ -139,3 +139,65 @@ export async function createDetector(formats: BarcodeFormatName[]): Promise<Fram
   }
   return new ZxingFrameDetector(formats)
 }
+
+export interface ImageBarcode {
+  value: string
+  format?: BarcodeFormatName
+  box: Rect
+}
+
+/** Finds barcodes anywhere in a still image (photo mode). */
+export async function detectBarcodesInImage(
+  canvas: HTMLCanvasElement,
+  formats: BarcodeFormatName[],
+): Promise<ImageBarcode[]> {
+  const Native = nativeCtor()
+  if (Native) {
+    try {
+      const supported = await Native.getSupportedFormats()
+      const usable = formats.filter((f) => supported.includes(f))
+      if (usable.length > 0) {
+        const codes = await new Native({ formats: usable }).detect(canvas)
+        return codes
+          .filter((c) => c.rawValue)
+          .map((c) => ({
+            value: c.rawValue,
+            format: c.format as BarcodeFormatName,
+            box: {
+              x: c.boundingBox.x,
+              y: c.boundingBox.y,
+              width: c.boundingBox.width,
+              height: c.boundingBox.height,
+            },
+          }))
+      }
+    } catch {
+      // fall through to ZXing
+    }
+  }
+  // ZXing finds one code per pass; good enough as a fallback
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  const { width: w, height: h } = canvas
+  const rgba = ctx.getImageData(0, 0, w, h).data
+  const lum = new Uint8ClampedArray(w * h)
+  for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (rgba[j] + 2 * rgba[j + 1] + rgba[j + 2]) >> 2
+  const hints = new Map<DecodeHintType, unknown>([
+    [DecodeHintType.POSSIBLE_FORMATS, formats.map((f) => TO_ZXING[f])],
+    [DecodeHintType.TRY_HARDER, true],
+  ])
+  try {
+    const r = new MultiFormatOneDReader(hints).decode(
+      new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(lum, w, h))),
+      hints,
+    )
+    const pts = r.getResultPoints().map((p) => ({ x: p.getX(), y: p.getY() }))
+    const xs = pts.map((p) => p.x)
+    const ys = pts.map((p) => p.y)
+    const x = Math.min(...xs)
+    const y = Math.min(...ys)
+    const width = Math.max(40, Math.max(...xs) - x)
+    return [{ value: r.getText(), box: { x, y: y - width * 0.15, width, height: width * 0.3 } }]
+  } catch {
+    return []
+  }
+}
