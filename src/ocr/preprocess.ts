@@ -27,19 +27,32 @@ function boxBlur(lum: Float32Array, w: number, h: number, r: number): Float32Arr
   return out
 }
 
+export interface CleanOptions {
+  /** Height the crop is enlarged to. */
+  targetHeight: number
+  /**
+   * Extra horizontal stretch. The shell print is a very narrow, tall inkjet
+   * font; widened 2x it reads like a normal font (tested on 3 shell photos).
+   */
+  stretch?: number
+  /** Pixels darker than mean * threshold become black. */
+  threshold?: number
+}
+
 /**
  * Turns a crop into clean black-on-white text for Tesseract: enlarged, blurred
  * a little (joins the dots of dot-matrix / inkjet prints like "Serial no.:
  * 839662" on the shells) and thresholded, with a white border around it.
- * Returns the canvas and the scale used, to map word boxes back.
+ * Returns the canvas and the scales used, to map word boxes back.
  */
 export function cleanTextCrop(
   src: CanvasImageSource,
   rect: Rect,
-  targetHeight: number,
-): { canvas: HTMLCanvasElement; scale: number } {
+  { targetHeight, stretch = 1, threshold: thresholdFactor = 0.85 }: CleanOptions,
+): { canvas: HTMLCanvasElement; scaleX: number; scaleY: number } {
   const scale = Math.max(1, Math.min(5, targetHeight / rect.height))
-  const w = Math.max(1, Math.round(rect.width * scale))
+  const scaleX = scale * stretch
+  const w = Math.max(1, Math.round(rect.width * scaleX))
   const h = Math.max(1, Math.round(rect.height * scale))
   const canvas = document.createElement('canvas')
   canvas.width = w + 2 * LINE_BORDER
@@ -54,15 +67,15 @@ export function cleanTextCrop(
   const d = img.data
   let lum: Float32Array = new Float32Array(w * h)
   for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (d[j] + 2 * d[j + 1] + d[j + 2]) / 4
-  lum = boxBlur(lum, w, h, Math.round(scale * 0.8))
+  lum = boxBlur(lum, w, h, Math.round(scale * 0.5))
   let sum = 0
   for (const v of lum) sum += v
-  const threshold = (sum / lum.length) * 0.85
+  const threshold = (sum / lum.length) * thresholdFactor
   for (let i = 0, j = 0; i < lum.length; i++, j += 4) {
     const v = lum[i] > threshold ? 255 : 0
     d[j] = d[j + 1] = d[j + 2] = v
     d[j + 3] = 255
   }
   ctx.putImageData(img, LINE_BORDER, LINE_BORDER)
-  return { canvas, scale }
+  return { canvas, scaleX, scaleY: scale }
 }

@@ -4,7 +4,7 @@ import { elementRectToVideo } from '../scanner/geometry'
 import { pickCandidate } from '../scanner/pick'
 import { rotate90, scanImage, sharpen } from '../scanner/imageScan'
 import { extractSerial } from '../ocr/extract'
-import { suggestFromHistory } from '../photo/analyze'
+import { consensus, suggestFromHistory } from '../photo/analyze'
 import { StabilityFilter } from '../scanner/stability'
 import { rearLenses, zoomTarget } from '../scanner/useCamera'
 
@@ -270,5 +270,14 @@ describe('suggestFromHistory', () => {
   it('keeps a suggestion that came from the label text', () => {
     const out = suggestFromHistory([hit('29464707'), hit('13690706', true)], ['29400000'])
     expect(out.filter((h) => h.suggested).map((h) => h.value)).toEqual(['13690706'])
+  })
+})
+
+describe('consensus (tap OCR voting)', () => {
+  it('fixes a single misread digit by majority per position', () => {
+    expect(consensus(['007657', '907657', '907657', '907857'])).toBe('907657')
+  })
+  it('uses the most common length', () => {
+    expect(consensus(['39662', '839662', '839662'])).toBe('839662')
   })
 })

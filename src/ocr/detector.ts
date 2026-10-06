@@ -22,7 +22,7 @@ export async function createOcrDetector(kind: SerialKind): Promise<FrameDetector
       // every other frame: cleaned-up black-and-white version, which reads
       // dot-matrix prints (shell serials) that the plain image does not
       if (++frame % 2 === 0) {
-        const { canvas: clean } = cleanTextCrop(video, roi, 360)
+        const { canvas: clean } = cleanTextCrop(video, roi, { targetHeight: 360, stretch: 1.6, threshold: 0.9 })
         const { data } = await recognize(clean, 'block')
         const v = extractSerial(data.text, scanConfig.ocr[kind])
         return v ? { value: v } : null

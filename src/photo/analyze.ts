@@ -186,27 +186,74 @@ export async function readAround(canvas: HTMLCanvasElement, p: Point): Promise<P
 
 /**
  * Text under the finger. The line height on a photo depends on distance, so a
- * few crop heights are tried, each cleaned up for OCR (enlarged, dots joined,
- * black and white). The number read most often wins; the rest are offered too.
+ * few crops are tried, each cleaned up for OCR (enlarged, widened for the
+ * narrow shell font, dots joined, black and white). The number read most
+ * often wins; the rest are offered too. Settings come from tests on 3 shell
+ * photos where each of them read all three serials.
  */
 async function textAround(canvas: HTMLCanvasElement, p: Point): Promise<PhotoHit[]> {
   const w = Math.min(canvas.width, Math.max(240, canvas.width * 0.38))
   const x = Math.max(0, Math.min(canvas.width - w, p.x - w / 2))
   const votes = new Map<string, { hit: PhotoHit; n: number }>()
-  for (const frac of [0.035, 0.05, 0.07]) {
-    const h = Math.min(canvas.height, Math.max(24, canvas.width * frac))
+  const tries = [
+    { frac: 0.05, threshold: 0.9, stretch: 2 },
+    { frac: 0.07, threshold: 0.85, stretch: 2 },
+    { frac: 0.035, threshold: 0.9, stretch: 2 },
+    { frac: 0.05, threshold: 0.9, stretch: 1.5 },
+    { frac: 0.07, threshold: 0.85, stretch: 1.5 },
+  ]
+  const reads: string[] = []
+  for (const t of tries) {
+    const h = Math.min(canvas.height, Math.max(24, canvas.width * t.frac))
     const y = Math.max(0, Math.min(canvas.height - h, p.y - h / 2))
-    const { canvas: img, scale } = cleanTextCrop(canvas, { x, y, width: w, height: h }, 150)
+    const { canvas: img, scaleX, scaleY } = cleanTextCrop(
+      canvas,
+      { x, y, width: w, height: h },
+      { targetHeight: 150, stretch: t.stretch, threshold: t.threshold },
+    )
     const { data } = await recognize(img, 'line', true)
-    for (const hit of numberHits(wordsOf(data, { x: x - LINE_BORDER / scale, y: y - LINE_BORDER / scale }, scale))) {
-      const v = votes.get(hit.value)
+    // word boxes come back in the enlarged, widened crop; map them to the photo
+    for (const word of wordsOf(data)) {
+      const n = asNumber(word.text)
+      if (!n || n.length < MIN_DIGITS) continue
+      const hit: PhotoHit = {
+        value: n,
+        method: 'ocr',
+        box: {
+          x: x + (word.box.x - LINE_BORDER) / scaleX,
+          y: y + (word.box.y - LINE_BORDER) / scaleY,
+          width: word.box.width / scaleX,
+          height: word.box.height / scaleY,
+        },
+      }
+      reads.push(n)
+      const v = votes.get(n)
       if (v) v.n++
-      else votes.set(hit.value, { hit, n: 1 })
+      else votes.set(n, { hit, n: 1 })
     }
   }
-  return [...votes.values()]
-    .sort((a, b) => b.n - a.n || b.hit.value.length - a.hit.value.length)
-    .map((v) => v.hit)
+  const ranked = [...votes.values()].sort((a, b) => b.n - a.n || b.hit.value.length - a.hit.value.length)
+  if (ranked.length === 0) return []
+  // one misread digit should not win: vote digit by digit among reads of the
+  // most common length and put that consensus first
+  const best = consensus(reads)
+  const top = ranked.find((r) => r.hit.value === best)?.hit ?? { ...ranked[0].hit, value: best }
+  return [top, ...ranked.map((r) => r.hit).filter((h) => h.value !== best)]
+}
+
+/** Per-position majority over reads of the most common length. */
+export function consensus(reads: string[]): string {
+  const byLen = new Map<number, string[]>()
+  for (const r of reads) byLen.set(r.length, [...(byLen.get(r.length) ?? []), r])
+  const group = [...byLen.values()].sort((a, b) => b.length - a.length)[0] ?? []
+  if (group.length === 0) return ''
+  let out = ''
+  for (let i = 0; i < group[0].length; i++) {
+    const count = new Map<string, number>()
+    for (const r of group) count.set(r[i], (count.get(r[i]) ?? 0) + 1)
+    out += [...count.entries()].sort((a, b) => b[1] - a[1])[0][0]
+  }
+  return out
 }
 
 /** Drops OCR reads that are just a cut-off piece of a barcode value (e.g. "9464704" of "29464704"). */
