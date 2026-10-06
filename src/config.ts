@@ -39,6 +39,8 @@ export interface OcrRule {
 
 export interface ScanConfig {
   formats: BarcodeFormatName[]
+  /** Shorter reads are ignored (quantity codes like "1", false positives). */
+  minLength: number
   /** How long the same code must be read continuously before it is accepted. */
   stableMs: number
   /** Minimum number of matching reads within stableMs. */
@@ -54,6 +56,7 @@ export interface ScanConfig {
 
 export const scanConfig: ScanConfig = {
   formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf'],
+  minLength: 4,
   stableMs: 400,
   minHits: 3,
   advanceDelayMs: 500,

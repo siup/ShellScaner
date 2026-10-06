@@ -6,8 +6,9 @@ import {
   MultiFormatOneDReader,
   RGBLuminanceSource,
 } from '@zxing/library'
-import type { BarcodeFormatName } from '../config'
+import { scanConfig, type BarcodeFormatName } from '../config'
 import { centerOf, type Point, type Rect } from './geometry'
+import { rgbaToLuminance, scanImage, TO_ZXING, type ImageBarcode, type ScanOptions } from './imageScan'
 import { pickCandidate, type Candidate, type Detection } from './pick'
 
 export type { Detection }
@@ -46,7 +47,7 @@ class NativeFrameDetector implements FrameDetector {
   async detect(video: HTMLVideoElement, roi: Rect): Promise<Detection | null> {
     const codes = await this.detector.detect(video)
     const cands: Candidate[] = codes
-      .filter((c) => c.rawValue)
+      .filter((c) => c.rawValue && c.rawValue.length >= scanConfig.minLength)
       .map((c) => ({
         value: c.rawValue,
         format: c.format as BarcodeFormatName,
@@ -64,16 +65,6 @@ class NativeFrameDetector implements FrameDetector {
 }
 
 // ---------- ZXing fallback (iOS, desktop, phones without the native API) ----------
-
-const TO_ZXING: Record<BarcodeFormatName, BarcodeFormat> = {
-  code_128: BarcodeFormat.CODE_128,
-  code_39: BarcodeFormat.CODE_39,
-  ean_13: BarcodeFormat.EAN_13,
-  ean_8: BarcodeFormat.EAN_8,
-  upc_a: BarcodeFormat.UPC_A,
-  upc_e: BarcodeFormat.UPC_E,
-  itf: BarcodeFormat.ITF,
-}
 
 const MAX_CROP_WIDTH = 1280
 
@@ -117,7 +108,9 @@ class ZxingFrameDetector implements FrameDetector {
       // plain luminance source: no 90° rotation attempts, the reticle is horizontal anyway
       const source = new RGBLuminanceSource(lum, w, h)
       const result = this.reader.decode(new BinaryBitmap(new HybridBinarizer(source)), this.hints)
-      return { value: result.getText(), format: this.fromZxing.get(result.getBarcodeFormat()) }
+      const value = result.getText()
+      if (value.length < scanConfig.minLength) return null
+      return { value, format: this.fromZxing.get(result.getBarcodeFormat()) }
     } catch {
       return null // NotFound / Checksum / Format: nothing readable this frame
     } finally {
@@ -140,64 +133,81 @@ export async function createDetector(formats: BarcodeFormatName[]): Promise<Fram
   return new ZxingFrameDetector(formats)
 }
 
-export interface ImageBarcode {
-  value: string
-  format?: BarcodeFormatName
-  box: Rect
+export type { ImageBarcode }
+
+let worker: Worker | null = null
+let jobId = 0
+const pending = new Map<number, { resolve: (c: ImageBarcode[]) => void; reject: (e: Error) => void }>()
+
+function scanWorker(): Worker | null {
+  if (worker) return worker
+  try {
+    worker = new Worker(new URL('./barcodeWorker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (e: MessageEvent<{ id: number; codes?: ImageBarcode[]; error?: string }>) => {
+      const job = pending.get(e.data.id)
+      pending.delete(e.data.id)
+      if (!job) return
+      if (e.data.codes) job.resolve(e.data.codes)
+      else job.reject(new Error(e.data.error))
+    }
+    return worker
+  } catch {
+    return null
+  }
 }
 
-/** Finds barcodes anywhere in a still image (photo mode). */
+/** Runs the band scan off the main thread so the UI and OCR keep going. */
+function scanOffThread(lum: Uint8ClampedArray, w: number, h: number, opts: ScanOptions): Promise<ImageBarcode[]> {
+  const wk = scanWorker()
+  if (!wk) return Promise.resolve(scanImage(lum, w, h, opts))
+  const id = ++jobId
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject })
+    wk.postMessage({ id, lum, w, h, opts }, [lum.buffer])
+  })
+}
+
+/**
+ * Finds all barcodes in a still image (photo mode). `nearTap` is for the small
+ * area around a finger: no sideways pass, finer bands.
+ */
 export async function detectBarcodesInImage(
   canvas: HTMLCanvasElement,
   formats: BarcodeFormatName[],
+  nearTap = false,
 ): Promise<ImageBarcode[]> {
+  const found = new Map<string, ImageBarcode>()
   const Native = nativeCtor()
   if (Native) {
     try {
       const supported = await Native.getSupportedFormats()
       const usable = formats.filter((f) => supported.includes(f))
       if (usable.length > 0) {
-        const codes = await new Native({ formats: usable }).detect(canvas)
-        return codes
-          .filter((c) => c.rawValue)
-          .map((c) => ({
+        for (const c of await new Native({ formats: usable }).detect(canvas)) {
+          if (!c.rawValue || found.has(c.rawValue) || c.rawValue.length < scanConfig.minLength) continue
+          const b = c.boundingBox
+          found.set(c.rawValue, {
             value: c.rawValue,
             format: c.format as BarcodeFormatName,
-            box: {
-              x: c.boundingBox.x,
-              y: c.boundingBox.y,
-              width: c.boundingBox.width,
-              height: c.boundingBox.height,
-            },
-          }))
+            box: { x: b.x, y: b.y, width: b.width, height: b.height },
+          })
+        }
       }
     } catch {
-      // fall through to ZXing
+      // ZXing below still runs
     }
   }
-  // ZXing finds one code per pass; good enough as a fallback
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  // ZXing runs too: it catches small codes the native detector sometimes skips,
+  // and it is the only engine in browsers without BarcodeDetector (Brave, iOS)
   const { width: w, height: h } = canvas
-  const rgba = ctx.getImageData(0, 0, w, h).data
-  const lum = new Uint8ClampedArray(w * h)
-  for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (rgba[j] + 2 * rgba[j + 1] + rgba[j + 2]) >> 2
-  const hints = new Map<DecodeHintType, unknown>([
-    [DecodeHintType.POSSIBLE_FORMATS, formats.map((f) => TO_ZXING[f])],
-    [DecodeHintType.TRY_HARDER, true],
-  ])
-  try {
-    const r = new MultiFormatOneDReader(hints).decode(
-      new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(lum, w, h))),
-      hints,
-    )
-    const pts = r.getResultPoints().map((p) => ({ x: p.getX(), y: p.getY() }))
-    const xs = pts.map((p) => p.x)
-    const ys = pts.map((p) => p.y)
-    const x = Math.min(...xs)
-    const y = Math.min(...ys)
-    const width = Math.max(40, Math.max(...xs) - x)
-    return [{ value: r.getText(), box: { x, y: y - width * 0.15, width, height: width * 0.3 } }]
-  } catch {
-    return []
-  }
+  const rgba = canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, w, h).data
+  const codes = await scanOffThread(rgbaToLuminance(rgba, w, h), w, h, {
+    formats,
+    minLength: scanConfig.minLength,
+    sharpened: true,
+    sideways: !nearTap,
+    bandFraction: nearTap ? 1 / 5 : 1 / 12,
+  })
+  for (const c of codes) if (!found.has(c.value)) found.set(c.value, c)
+  return [...found.values()]
 }

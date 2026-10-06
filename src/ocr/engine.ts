@@ -27,7 +27,7 @@ export function getOcrWorker(): Promise<Worker> {
   return workerPromise
 }
 
-export type PageMode = 'block' | 'sparse'
+export type PageMode = 'block' | 'sparse' | 'line'
 
 /**
  * Runs OCR with the given page mode. Calls are queued so the camera loop and
@@ -41,7 +41,7 @@ export function recognize(
   const job = queue.then(async () => {
     const worker = await getOcrWorker()
     const { PSM } = await import('tesseract.js')
-    const psm = mode === 'block' ? PSM.SINGLE_BLOCK : PSM.SPARSE_TEXT
+    const psm = mode === 'block' ? PSM.SINGLE_BLOCK : mode === 'line' ? PSM.SINGLE_LINE : PSM.SPARSE_TEXT
     if (psm !== currentPsm) {
       await worker.setParameters({ tessedit_pageseg_mode: psm })
       currentPsm = psm

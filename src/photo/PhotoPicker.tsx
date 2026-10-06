@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import type { InputMethod, SerialKind } from '../lib/types'
-import { analyzePhoto, loadPhoto, readAround, type PhotoHit } from './analyze'
+import { findBarcodes, findNumbers, loadPhoto, readAround, type PhotoHit } from './analyze'
 
 type Status = 'loading' | 'reading' | 'ready' | 'error'
 
@@ -36,17 +36,20 @@ export function PhotoPicker({
       try {
         const c = await loadPhoto(file)
         if (cancelled) return
-        const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/jpeg', 0.9))
-        if (cancelled || !blob) return
-        objectUrl = URL.createObjectURL(blob)
+        // <img> applies EXIF rotation the same way createImageBitmap does
+        objectUrl = URL.createObjectURL(file)
         setCanvas(c)
         setUrl(objectUrl)
         setStatus('reading')
-        const found = await analyzePhoto(c, kind)
+        // barcodes (worker) and text (OCR worker) run in parallel; whatever
+        // finishes first is shown right away
+        const merge = (more: PhotoHit[]) =>
+          setHits((prev) => [...prev, ...more.filter((m) => !prev.some((p) => p.value === m.value))])
+        const codes = findBarcodes(c).then((r) => !cancelled && merge(r), () => undefined)
+        const numbers = findNumbers(c, kind).then((r) => !cancelled && merge(r), () => undefined)
+        await Promise.all([codes, numbers])
         if (cancelled) return
-        setHits(found)
         setStatus('ready')
-        setNote(found.length ? null : 'Nothing found. Tap the number on the photo.')
       } catch {
         if (!cancelled) setStatus('error')
       }
@@ -70,7 +73,7 @@ export function PhotoPicker({
     try {
       const near = await readAround(canvas, p)
       if (near.length === 0) {
-        setNote('No number here. Tap closer to the digits or enter it manually.')
+        setNote('Nothing here. Tap right on the barcode or digits, or enter it manually.')
       } else {
         // keep earlier hits, add the new ones (closest first)
         setHits((prev) => [...near, ...prev.filter((h) => !near.some((n) => n.value === h.value))])
@@ -93,8 +96,10 @@ export function PhotoPicker({
         </button>
         <span className="photo-status">
           {status === 'loading' && 'Opening photo…'}
-          {status === 'reading' && (note === 'Reading this spot…' ? note : 'Reading photo…')}
-          {status === 'ready' && (note ?? 'Tap the right number')}
+          {status === 'reading' &&
+            (note === 'Reading this spot…' ? note : 'Reading photo…')}
+          {status === 'ready' &&
+            (note ?? (hits.length ? 'Tap the right number' : 'Nothing found. Tap the number or barcode on the photo.'))}
           {status === 'error' && 'Could not open this photo'}
         </span>
       </div>

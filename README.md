@@ -29,7 +29,7 @@ Nowa wersja wrzucona na serwer zainstaluje się sama przy następnym uruchomieni
 - Liczy się tylko kod, którego środek jest wewnątrz celownika. Jeśli w celowniku są dwa kody, wygrywa większy, a przy podobnej wielkości ten bliżej środka.
 - Kod jest akceptowany dopiero po ok. 400 ms stabilnego odczytu (min. 3 trafienia). Jeśli w tym czasie pojawi się inny kod, licznik startuje od nowa, więc dwa migające kody nigdy nie zostaną przyjęte przypadkiem.
 - Kod, który właśnie został przyjęty albo odrzucony, jest ignorowany, dopóki nie zniknie z celownika. Dzięki temu prefab, który jeszcze jest w kadrze, nie wskoczy jako numer shella.
-- Silnik: na Android Chrome natywny `BarcodeDetector` (ML Kit, działa na urządzeniu, offline). Tam gdzie go nie ma (iOS, desktop) ZXing (`@zxing/library`) dekoduje wycinek obrazu z celownika.
+- Silnik: na Android Chrome natywny `BarcodeDetector` (ML Kit, działa na urządzeniu, offline). Tam gdzie go nie ma (Brave, iOS, desktop) ZXing (`@zxing/library`) dekoduje wycinek obrazu z celownika. Na Androidzie najlepiej używać Chrome. W trybie zdjęcia ZXing działa zawsze, w osobnym wątku (Web Worker), równolegle z OCR.
 - Po dobrym odczycie: zielona ramka, wibracja, krótki beep (Web Audio, bez plików), numer na ekranie i po 500 ms przejście dalej.
 
 Obsługiwane formaty: Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E, ITF.
@@ -40,7 +40,7 @@ Na ekranie skanowania są przyciski:
 
 - **Enter manually** otwiera klawiaturę numeryczną. Przycisk ABC przełącza na litery, gdyby format numerów się zmienił.
 - **Read text** przełącza skaner na OCR. Wtedy w celownik łapie się wiersz z numerem (dla prefabu "Production Order"), a nie barcode. Odczytany numer zawsze trzeba potwierdzić, bo OCR potrafi pomylić cyfry. Wybrany tryb zapamiętuje się osobno dla prefabu i shella.
-- **Photo** pozwala zrobić albo wybrać zdjęcie. Aplikacja szuka na nim kodów kreskowych i numerów, zaznacza je ramkami i pokazuje listę pod zdjęciem. Numer z wiersza "Production Order" jest oznaczony jako Suggested. Jeśli czegoś nie znalazła, stuknij palcem w numer na zdjęciu, wtedy OCR czyta powiększony fragment wokół palca.
+- **Photo** pozwala zrobić albo wybrać zdjęcie. Aplikacja szuka na nim wszystkich kodów kreskowych (także małych i obróconych o 90°, zdjęcie jest dodatkowo wyostrzane) oraz numerów w tekście. Znalezione rzeczy zaznacza ramkami i pokazuje jako listę pod zdjęciem. Numer z wiersza "Production Order" jest oznaczony jako Suggested. Jeśli czegoś nie znalazła, stuknij palcem w kod albo numer na zdjęciu. Wtedy ten fragment jest powiększany i czytany jeszcze raz, osobno jako barcode i jako tekst (z obróbką pod kropkowy nadruk, np. "Serial no.: 839662" na shellach).
 - **Light** włącza latarkę. Jeśli telefon albo przeglądarka nie pozwala nią sterować, pojawi się komunikat. Na iPhonie Safari nie daje dostępu do latarki.
 
 Numery z OCR mają w danych `inputMethod: ocr`.

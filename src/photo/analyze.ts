@@ -1,5 +1,6 @@
 import { scanConfig } from '../config'
 import { recognize } from '../ocr/engine'
+import { cleanTextCrop, LINE_BORDER } from '../ocr/preprocess'
 import { asNumber } from '../ocr/extract'
 import type { InputMethod, SerialKind } from '../lib/types'
 import { detectBarcodesInImage } from '../scanner/detectors'
@@ -14,7 +15,9 @@ export interface PhotoHit {
   suggested?: boolean
 }
 
-const MAX_SIDE = 2000
+// barcodes on a label are small, so keep plenty of pixels (OCR downsizes itself)
+const MAX_SIDE = 3200
+const OCR_SIDE = 2000
 const MIN_DIGITS = 5
 
 /** Loads a photo into a canvas, EXIF rotation applied, scaled to a sane size. */
@@ -117,12 +120,15 @@ async function ocrPass(canvas: HTMLCanvasElement, maxSide: number, filter: strin
   return wordsOf(data, { x: 0, y: 0 }, img.width / canvas.width)
 }
 
-/** Barcodes and every number-like word on the photo, as tappable boxes. */
-export async function analyzePhoto(canvas: HTMLCanvasElement, kind: SerialKind): Promise<PhotoHit[]> {
+/** Step 1 (fast): every barcode on the photo. */
+export async function findBarcodes(canvas: HTMLCanvasElement): Promise<PhotoHit[]> {
   const barcodes = await detectBarcodesInImage(canvas, scanConfig.formats)
-  const hits: PhotoHit[] = barcodes.map((b) => ({ value: b.value, method: 'barcode', box: b.box }))
+  return barcodes.map((b) => ({ value: b.value, method: 'barcode', box: b.box }))
+}
 
-  let words = await ocrPass(canvas, MAX_SIDE, 'grayscale(1) contrast(1.4)')
+/** Step 2 (slower): number-like words, with the anchored one marked as suggested. */
+export async function findNumbers(canvas: HTMLCanvasElement, kind: SerialKind): Promise<PhotoHit[]> {
+  let words = await ocrPass(canvas, OCR_SIDE, 'grayscale(1) contrast(1.4)')
   let textHits = numberHits(words)
   markSuggested(words, textHits, kind)
   if (!textHits.some((h) => h.suggested)) {
@@ -134,7 +140,30 @@ export async function analyzePhoto(canvas: HTMLCanvasElement, kind: SerialKind):
     for (const h of textHits) h.suggested = false
     markSuggested(words, textHits, kind)
   }
-  return [...hits, ...textHits]
+  return textHits
+}
+
+/** Barcode right under the finger: a wide band around the tap, enlarged if small. */
+async function barcodesAround(canvas: HTMLCanvasElement, p: Point): Promise<PhotoHit[]> {
+  const w = Math.min(canvas.width, Math.max(300, canvas.width * 0.4))
+  const h = Math.min(canvas.height, w * 0.35)
+  const x = Math.max(0, Math.min(canvas.width - w, p.x - w / 2))
+  const y = Math.max(0, Math.min(canvas.height - h, p.y - h / 2))
+  // enlarge: together with sharpening this gives thin bars enough pixels
+  const scale = Math.max(1.5, Math.min(2.5, 1600 / w))
+  const crop = document.createElement('canvas')
+  crop.width = Math.round(w * scale)
+  crop.height = Math.round(h * scale)
+  crop.getContext('2d', { willReadFrequently: true })!.drawImage(canvas, x, y, w, h, 0, 0, crop.width, crop.height)
+  const codes = await detectBarcodesInImage(crop, scanConfig.formats, true)
+  const dist = (r: Rect) => Math.hypot(r.x + r.width / 2 - p.x, r.y + r.height / 2 - p.y)
+  return codes
+    .map((c) => ({
+      value: c.value,
+      method: 'barcode' as const,
+      box: { x: x + c.box.x / scale, y: y + c.box.y / scale, width: c.box.width / scale, height: c.box.height / scale },
+    }))
+    .sort((a, b) => dist(a.box) - dist(b.box))
 }
 
 /**
@@ -142,20 +171,35 @@ export async function analyzePhoto(canvas: HTMLCanvasElement, kind: SerialKind):
  * photo around that point, enlarged, which often works when the full photo did not.
  */
 export async function readAround(canvas: HTMLCanvasElement, p: Point): Promise<PhotoHit[]> {
-  const w = Math.min(canvas.width, Math.max(300, canvas.width * 0.45))
-  const h = Math.min(canvas.height, Math.max(80, canvas.height * 0.09))
+  // barcode and text are looked for at the same time; a barcode wins
+  const [codes, text] = await Promise.all([
+    barcodesAround(canvas, p).catch(() => [] as PhotoHit[]),
+    textAround(canvas, p).catch(() => [] as PhotoHit[]),
+  ])
+  return codes.length ? codes : text
+}
+
+/**
+ * Text under the finger. The line height on a photo depends on distance, so a
+ * few crop heights are tried, each cleaned up for OCR (enlarged, dots joined,
+ * black and white). The number read most often wins; the rest are offered too.
+ */
+async function textAround(canvas: HTMLCanvasElement, p: Point): Promise<PhotoHit[]> {
+  const w = Math.min(canvas.width, Math.max(240, canvas.width * 0.38))
   const x = Math.max(0, Math.min(canvas.width - w, p.x - w / 2))
-  const y = Math.max(0, Math.min(canvas.height - h, p.y - h / 2))
-  const scale = Math.min(3, 1400 / w)
-  const strip = document.createElement('canvas')
-  strip.width = Math.round(w * scale)
-  strip.height = Math.round(h * scale)
-  const ctx = strip.getContext('2d')!
-  ctx.filter = 'grayscale(1) contrast(1.4)'
-  ctx.drawImage(canvas, x, y, w, h, 0, 0, strip.width, strip.height)
-  const { data } = await recognize(strip, 'block', true)
-  const hits = numberHits(wordsOf(data, { x, y }, scale))
-  // closest to the finger first
-  const dist = (r: Rect) => Math.hypot(r.x + r.width / 2 - p.x, r.y + r.height / 2 - p.y)
-  return hits.sort((a, b) => dist(a.box) - dist(b.box))
+  const votes = new Map<string, { hit: PhotoHit; n: number }>()
+  for (const frac of [0.035, 0.05, 0.07]) {
+    const h = Math.min(canvas.height, Math.max(24, canvas.width * frac))
+    const y = Math.max(0, Math.min(canvas.height - h, p.y - h / 2))
+    const { canvas: img, scale } = cleanTextCrop(canvas, { x, y, width: w, height: h }, 150)
+    const { data } = await recognize(img, 'line', true)
+    for (const hit of numberHits(wordsOf(data, { x: x - LINE_BORDER / scale, y: y - LINE_BORDER / scale }, scale))) {
+      const v = votes.get(hit.value)
+      if (v) v.n++
+      else votes.set(hit.value, { hit, n: 1 })
+    }
+  }
+  return [...votes.values()]
+    .sort((a, b) => b.n - a.n || b.hit.value.length - a.hit.value.length)
+    .map((v) => v.hit)
 }

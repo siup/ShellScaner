@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { checkRules, scanConfig, type ScanConfig } from '../config'
 import { elementRectToVideo } from '../scanner/geometry'
 import { pickCandidate } from '../scanner/pick'
+import { rotate90, scanImage, sharpen } from '../scanner/imageScan'
 import { extractSerial } from '../ocr/extract'
 import { StabilityFilter } from '../scanner/stability'
 
@@ -153,5 +154,69 @@ describe('extractSerial (OCR)', () => {
 
   it('reads the shell serial print', () => {
     expect(extractSerial('Serial no.: 839662', shell)).toBe('839662')
+  })
+})
+
+describe('sharpen', () => {
+  it('leaves flat areas alone and steepens edges', () => {
+    const w = 20
+    const h = 3
+    const lum = new Uint8ClampedArray(w * h)
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) lum[y * w + x] = x < 10 ? 60 : 180
+    const out = sharpen(lum, w, h)
+    expect(out[w + 2]).toBe(60)
+    expect(out[w + 17]).toBe(180)
+    expect(out[w + 9]).toBeLessThan(60) // dark side of the edge gets darker
+    expect(out[w + 10]).toBeGreaterThan(180) // bright side brighter
+  })
+})
+
+describe('scanImage (photo barcodes)', () => {
+  const C39: Record<string, string> = {
+    '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn', '4': 'nnnwwnnnw',
+    '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw', '8': 'wnnwnnwnn', '9': 'nnwwnnwnn', '*': 'nwnnwnwnn',
+  }
+  /** Draws a Code 39 barcode into a luminance buffer. */
+  function draw(lum: Uint8ClampedArray, w: number, text: string, x0: number, y0: number, h: number, nw: number) {
+    let x = x0
+    for (const ch of `*${text}*`) {
+      ;[...C39[ch]].forEach((c, i) => {
+        const bw = c === 'w' ? nw * 3 : nw
+        if (i % 2 === 0) for (let y = y0; y < y0 + h; y++) lum.fill(0, y * w + x, y * w + x + bw)
+        x += bw
+      })
+      x += nw
+    }
+  }
+  const opts = { formats: scanConfig.formats, minLength: 4, sharpened: false, sideways: true, bandFraction: 1 / 12 }
+
+  it('finds every code on a label, not only the first one', () => {
+    const w = 1200
+    const h = 900
+    const lum = new Uint8ClampedArray(w * h).fill(230)
+    draw(lum, w, '29464704', 60, 100, 120, 3) // material number, big
+    draw(lum, w, '13682767', 60, 420, 50, 2) // prefab serial, small, below
+    draw(lum, w, '5551', 760, 100, 120, 3) // another code in the same row
+    const values = scanImage(lum, w, h, opts).map((c) => c.value).sort()
+    expect(values).toEqual(['13682767', '29464704', '5551'])
+  })
+
+  it('finds a code stuck on sideways and maps its box back', () => {
+    const w = 900
+    const h = 300
+    const flat = new Uint8ClampedArray(w * h).fill(230)
+    draw(flat, w, '839662', 40, 100, 100, 3)
+    const turned = rotate90(flat, w, h) // now 300 wide, 900 tall: code runs vertically
+    const codes = scanImage(turned, h, w, opts)
+    expect(codes.map((c) => c.value)).toEqual(['839662'])
+    expect(codes[0].box.height).toBeGreaterThan(codes[0].box.width)
+  })
+
+  it('ignores reads shorter than minLength', () => {
+    const w = 600
+    const h = 200
+    const lum = new Uint8ClampedArray(w * h).fill(230)
+    draw(lum, w, '1', 40, 50, 100, 3)
+    expect(scanImage(lum, w, h, opts)).toEqual([])
   })
 })
