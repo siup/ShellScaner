@@ -55,13 +55,21 @@ export function CameraScanner({
   const [detector, setDetector] = useState<FrameDetector | null>(null)
   const [detectorError, setDetectorError] = useState<string | null>(null)
   const [locking, setLocking] = useState(false)
-  const [torchNote, setTorchNote] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const noteTimer = useRef<number | undefined>(undefined)
   const onScanRef = useRef(onScan)
   const ignoredRef = useRef<{ value: string; lastSeen: number } | null>(null)
 
   useEffect(() => {
     onScanRef.current = onScan
   }, [onScan])
+  useEffect(() => () => window.clearTimeout(noteTimer.current), [])
+
+  const showNote = (text: string | null, ms: number) => {
+    window.clearTimeout(noteTimer.current)
+    setNote(text)
+    if (text) noteTimer.current = window.setTimeout(() => setNote(null), ms)
+  }
 
   const formatsKey = formats.join(',')
   const detectorKey = engine === 'ocr' ? `ocr:${ocrKind}` : `barcode:${formatsKey}`
@@ -176,13 +184,30 @@ export function CameraScanner({
           <div className="scanner-hint">
             {camera.status === 'error'
               ? camera.error
-              : (torchNote ??
+              : (note ??
                 message ??
                 detectorError ??
                 (engine === 'ocr' && !detector ? 'Loading text recognition…' : hint))}
           </div>
         )}
-        {extras && <div className="scanner-extras">{extras}</div>}
+        {(extras || camera.lens) && (
+          <div className="scanner-extras">
+            {camera.lens && (
+              <button
+                type="button"
+                className="pill-btn"
+                onClick={() => {
+                  // the label tells which physical lens it is ("camera2 2, facing back")
+                  const label = camera.switchLens()
+                  if (label) showNote(label, 2500)
+                }}
+              >
+                Lens {camera.lens.index + 1}/{camera.lens.count}
+              </button>
+            )}
+            {extras}
+          </div>
+        )}
         <div className="scanner-actions">
           {actions}
           {camera.status === 'ready' && (
@@ -191,8 +216,7 @@ export function CameraScanner({
               className={camera.torchOn ? 'tool torch on' : 'tool torch'}
               onClick={async () => {
                 const ok = await camera.toggleTorch()
-                setTorchNote(ok ? null : 'Light is not available on this phone / browser')
-                if (!ok) setTimeout(() => setTorchNote(null), 3000)
+                showNote(ok ? null : 'Light is not available on this phone / browser', 3000)
               }}
             >
               <Icon name="flash" />

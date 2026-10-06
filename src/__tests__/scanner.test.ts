@@ -6,6 +6,7 @@ import { rotate90, scanImage, sharpen } from '../scanner/imageScan'
 import { extractSerial } from '../ocr/extract'
 import { suggestFromHistory } from '../photo/analyze'
 import { StabilityFilter } from '../scanner/stability'
+import { rearLenses, zoomTarget } from '../scanner/useCamera'
 
 describe('StabilityFilter', () => {
   it('accepts only after the code was stable long enough', () => {
@@ -219,6 +220,30 @@ describe('scanImage (photo barcodes)', () => {
     const lum = new Uint8ClampedArray(w * h).fill(230)
     draw(lum, w, '1', 40, 50, 100, 3)
     expect(scanImage(lum, w, h, opts)).toEqual([])
+  })
+})
+
+describe('camera lenses', () => {
+  const cam = (deviceId: string, label: string) => ({ kind: 'videoinput' as const, deviceId, label })
+
+  it('keeps only rear cameras, in browser order', () => {
+    const lenses = rearLenses([
+      cam('a', 'camera2 1, facing front'),
+      cam('b', 'camera2 0, facing back'),
+      { kind: 'audioinput' as const, deviceId: 'm', label: 'mic' },
+      cam('c', 'camera2 3, facing back'),
+    ])
+    expect(lenses.map((l) => l.id)).toEqual(['b', 'c'])
+  })
+
+  it('falls back to every camera when labels say nothing about facing', () => {
+    expect(rearLenses([cam('a', 'HD Webcam'), cam('b', 'USB Camera')])).toHaveLength(2)
+  })
+
+  it('zooms back to 1x without going below the lens minimum', () => {
+    expect(zoomTarget(1, 10)).toBe(1)
+    expect(zoomTarget(0.6, 10)).toBe(1)
+    expect(zoomTarget(2, 10)).toBe(2)
   })
 })
 

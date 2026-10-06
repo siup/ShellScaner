@@ -2,9 +2,15 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 type CameraStatus = 'starting' | 'ready' | 'error'
 
-interface TorchCapabilities extends MediaTrackCapabilities {
+interface CameraCapabilities extends MediaTrackCapabilities {
   torch?: boolean
   focusMode?: string[]
+  zoom?: { min: number; max: number }
+}
+
+export interface Lens {
+  id: string
+  label: string
 }
 
 const DEVICE_KEY = 'scanner.cameraId'
@@ -22,22 +28,39 @@ function storedDevice(): string | null {
   }
 }
 
+function storeDevice(id: string) {
+  try {
+    localStorage.setItem(DEVICE_KEY, id)
+  } catch {
+    // ignore
+  }
+}
+
+/** Rear cameras in browser order. When the labels say nothing about facing, all of them. */
+export function rearLenses(devices: Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>[]): Lens[] {
+  const cams = devices.filter((d) => d.kind === 'videoinput' && d.deviceId)
+  const rear = cams.filter((d) => /back|rear|environment/i.test(d.label))
+  return (rear.length ? rear : cams).map((d) => ({ id: d.deviceId, label: d.label }))
+}
+
+async function listLenses(): Promise<Lens[]> {
+  try {
+    return rearLenses(await navigator.mediaDevices.enumerateDevices())
+  } catch {
+    return []
+  }
+}
+
 /**
  * On many Android phones facingMode "environment" lands on the ultra-wide lens,
  * which cannot focus close enough for small labels. Android names the main
  * rear lens "camera2 0, facing back", so prefer that one when it exists.
+ * Phones with telephoto lenses can still end up on the wrong one, that is what
+ * the lens button in the scanner is for.
  */
 async function preferredRearCamera(current: string | undefined): Promise<string | null> {
-  try {
-    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(
-      (d) => d.kind === 'videoinput',
-    )
-    const main = devices.find((d) => /camera2 0\b.*back/i.test(d.label))
-    if (main && main.deviceId && main.deviceId !== current) return main.deviceId
-  } catch {
-    // ignore
-  }
-  return null
+  const main = (await listLenses()).find((l) => /camera2 0\b.*back/i.test(l.label))
+  return main && main.id !== current ? main.id : null
 }
 
 async function open(deviceId: string | null): Promise<MediaStream> {
@@ -49,11 +72,31 @@ async function open(deviceId: string | null): Promise<MediaStream> {
 
 async function enableAutofocus(track: MediaStreamTrack) {
   try {
-    const caps = track.getCapabilities?.() as TorchCapabilities | undefined
+    const caps = track.getCapabilities?.() as CameraCapabilities | undefined
     if (caps?.focusMode?.includes('continuous')) {
       await track.applyConstraints({
         advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
       })
+    }
+  } catch {
+    // not supported
+  }
+}
+
+/** 1x, or as close to it as the lens goes. Below 1x a phone may jump to the ultra-wide. */
+export function zoomTarget(min: number, max: number): number {
+  return Math.min(Math.max(1, min), max)
+}
+
+/** Some phones hand the stream over already zoomed in, put it back to 1x. */
+async function resetZoom(track: MediaStreamTrack) {
+  try {
+    const zoom = (track.getCapabilities?.() as CameraCapabilities | undefined)?.zoom
+    const current = (track.getSettings() as MediaTrackSettings & { zoom?: number }).zoom
+    if (!zoom || current === undefined) return
+    const target = zoomTarget(zoom.min, zoom.max)
+    if (Math.abs(current - target) > 0.01) {
+      await track.applyConstraints({ advanced: [{ zoom: target } as MediaTrackConstraintSet] })
     }
   } catch {
     // not supported
@@ -65,6 +108,10 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
   const [error, setError] = useState<string | null>(null)
   const [torchSupported, setTorchSupported] = useState(false)
   const [torchOn, setTorchOn] = useState(false)
+  const [lenses, setLenses] = useState<Lens[]>([])
+  const [lensId, setLensId] = useState<string | null>(null)
+  // lens picked with the switch button; a new object every tap, so the camera always reopens
+  const [picked, setPicked] = useState<{ id: string } | null>(null)
   const trackRef = useRef<MediaStreamTrack | null>(null)
 
   useEffect(() => {
@@ -84,7 +131,7 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
         return
       }
       try {
-        const saved = storedDevice()
+        const saved = picked?.id ?? storedDevice()
         try {
           stream = await open(saved)
         } catch (e) {
@@ -99,24 +146,26 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
             stream = await open(better)
           }
           const id = stream.getVideoTracks()[0]?.getSettings().deviceId
-          try {
-            if (id) localStorage.setItem(DEVICE_KEY, id)
-          } catch {
-            // ignore
-          }
+          if (id) storeDevice(id)
         }
         if (cancelled) return stop(stream)
 
         const track = stream.getVideoTracks()[0]
         trackRef.current = track
         await enableAutofocus(track)
+        await resetZoom(track)
         const checkTorch = () => {
-          const caps = track.getCapabilities?.() as TorchCapabilities | undefined
+          const caps = track.getCapabilities?.() as CameraCapabilities | undefined
           if (!cancelled && caps?.torch) setTorchSupported(true)
         }
         checkTorch()
         // some Android phones report the torch only once frames are flowing
         setTimeout(checkTorch, 800)
+
+        const found = await listLenses()
+        if (cancelled) return
+        setLenses(found)
+        setLensId(track.getSettings().deviceId ?? null)
 
         const video = videoRef.current
         if (!video) return
@@ -145,7 +194,25 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
       stop(stream)
       trackRef.current = null
     }
-  }, [videoRef])
+  }, [videoRef, picked])
+
+  /** Rear lens currently in use, null when there is nothing to switch to. */
+  const lensIndex = lenses.findIndex((l) => l.id === lensId)
+  const lens =
+    lenses.length > 1 ? { index: Math.max(0, lensIndex), count: lenses.length } : null
+
+  /** Opens the next rear lens and remembers it. Returns its label. */
+  const switchLens = useCallback((): string | null => {
+    if (lenses.length < 2) return null
+    const next = lenses[(lensIndex + 1) % lenses.length]
+    storeDevice(next.id)
+    setStatus('starting')
+    setTorchOn(false)
+    setTorchSupported(false)
+    setLensId(next.id)
+    setPicked({ id: next.id })
+    return next.label
+  }, [lenses, lensIndex])
 
   /** Returns false when the phone/browser does not let us control the light. */
   const toggleTorch = useCallback(async (): Promise<boolean> => {
@@ -164,5 +231,5 @@ export function useCamera(videoRef: RefObject<HTMLVideoElement | null>) {
     }
   }, [torchOn])
 
-  return { status, error, torchSupported, torchOn, toggleTorch }
+  return { status, error, torchSupported, torchOn, toggleTorch, lens, switchLens }
 }

@@ -25,7 +25,7 @@ Nowa wersja wrzucona na serwer zainstaluje się sama przy następnym uruchomieni
 
 ## Jak działa skanowanie
 
-- Kamera tylna (`facingMode: environment`), 1080p, ciągły autofocus jeśli telefon go obsługuje. Na Androidzie aplikacja próbuje wybrać główny obiektyw zamiast szerokokątnego (ten drugi często nie łapie ostrości z bliska).
+- Kamera tylna (`facingMode: environment`), 1080p, ciągły autofocus jeśli telefon go obsługuje. Na Androidzie aplikacja próbuje wybrać główny obiektyw zamiast szerokokątnego (ten drugi często nie łapie ostrości z bliska). Po starcie zoom jest cofany do 1x, bo niektóre telefony oddają obraz już przybliżony.
 - Liczy się tylko kod, którego środek jest wewnątrz celownika. Jeśli w celowniku są dwa kody, wygrywa większy, a przy podobnej wielkości ten bliżej środka.
 - Kod jest akceptowany dopiero po ok. 400 ms stabilnego odczytu (min. 3 trafienia). Jeśli w tym czasie pojawi się inny kod, licznik startuje od nowa, więc dwa migające kody nigdy nie zostaną przyjęte przypadkiem.
 - Kod, który właśnie został przyjęty albo odrzucony, jest ignorowany, dopóki nie zniknie z celownika. Dzięki temu prefab, który jeszcze jest w kadrze, nie wskoczy jako numer shella.
@@ -41,6 +41,7 @@ Na ekranie skanowania są przyciski:
 - **Enter manually** otwiera klawiaturę numeryczną. Przycisk ABC przełącza na litery, gdyby format numerów się zmienił.
 - **Read text** przełącza skaner na OCR. Wtedy w celownik łapie się wiersz z numerem (dla prefabu "Production Order"), a nie barcode. Odczytany numer zawsze trzeba potwierdzić, bo OCR potrafi pomylić cyfry. Wybrany tryb zapamiętuje się osobno dla prefabu i shella.
 - **Photo** pozwala zrobić albo wybrać zdjęcie. Aplikacja szuka na nim wszystkich kodów kreskowych (zxing-cpp na całym zdjęciu, potem na powiększonych kafelkach, żeby złapać małe kody) oraz numerów w tekście. Wyniki spływają na listę na bieżąco. Sugerowany numer (na zielono) to numer z wiersza "Production Order" albo, gdy takiego wiersza nie ma, numer podobny do wcześniej zapisanych (ta sama długość i pierwsze 3 cyfry, np. prefaby 136…, a nie Material Number 2946…). Jeśli czegoś nie znalazła, stuknij palcem w kod albo numer na zdjęciu. Ten fragment jest wtedy powiększany i czytany wszystkimi metodami naraz: kod kreskowy zwykły i wyostrzony, tekst z obróbką pod kropkowy nadruk (np. "Serial no.: 839662" na shellach).
+- **Lens 1/3** (widoczny tylko gdy telefon ma więcej niż jeden tylny aparat) przełącza na kolejny obiektyw. Przydaje się na telefonach z teleobiektywem, np. Oppo Find X9 Ultra, gdzie obraz w Chrome bywa mocno przybliżony (najpewniej otwiera się teleobiektyw). Wybór zapamiętuje się na stałe, a pod celownikiem na chwilę pojawia się systemowa nazwa obiektywu (np. `camera2 2, facing back`).
 - **Light** włącza latarkę. Jeśli telefon albo przeglądarka nie pozwala nią sterować, pojawi się komunikat. Na iPhonie Safari nie daje dostępu do latarki.
 
 Numery z OCR mają w danych `inputMethod: ocr`.
