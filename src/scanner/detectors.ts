@@ -8,7 +8,9 @@ import {
 } from '@zxing/library'
 import { scanConfig, type BarcodeFormatName } from '../config'
 import { centerOf, type Point, type Rect } from './geometry'
-import { rgbaToLuminance, scanImage, TO_ZXING, type ImageBarcode, type ScanOptions } from './imageScan'
+import type { WorkerJob, WorkerReply } from './barcodeWorker'
+import { loadWasmReader, readCodes } from './wasmReader'
+import { rgbaToLuminance, scanImage, TO_ZXING, type ImageBarcode } from './imageScan'
 import { pickCandidate, type Candidate, type Detection } from './pick'
 
 export type { Detection }
@@ -119,6 +121,32 @@ class ZxingFrameDetector implements FrameDetector {
   }
 }
 
+/** zxing-cpp (WebAssembly) on the reticle crop: the fallback when there is no native detector. */
+class WasmFrameDetector implements FrameDetector {
+  readonly name = 'wasm'
+  private canvas = document.createElement('canvas')
+  private ctx = this.canvas.getContext('2d', { willReadFrequently: true })!
+
+  constructor(private formats: BarcodeFormatName[]) {}
+
+  async detect(video: HTMLVideoElement, roi: Rect): Promise<Detection | null> {
+    if (roi.width < 10 || roi.height < 10) return null
+    const scale = Math.min(1, MAX_CROP_WIDTH / roi.width)
+    const w = Math.round(roi.width * scale)
+    const h = Math.round(roi.height * scale)
+    if (this.canvas.width !== w) this.canvas.width = w
+    if (this.canvas.height !== h) this.canvas.height = h
+    this.ctx.drawImage(video, roi.x, roi.y, roi.width, roi.height, 0, 0, w, h)
+    const codes = await readCodes(this.ctx.getImageData(0, 0, w, h), this.formats, scanConfig.minLength, false)
+    // several codes inside the reticle: same rule as the native path
+    const best = pickCandidate(
+      codes.map((c) => ({ value: c.value, format: c.format, center: c.center, area: c.box.width * c.box.height })),
+      { x: 0, y: 0, width: w, height: h },
+    )
+    return best ? { value: best.value, format: best.format } : null
+  }
+}
+
 export async function createDetector(formats: BarcodeFormatName[]): Promise<FrameDetector> {
   const Native = nativeCtor()
   if (Native) {
@@ -130,23 +158,37 @@ export async function createDetector(formats: BarcodeFormatName[]): Promise<Fram
       // fall through to ZXing
     }
   }
-  return new ZxingFrameDetector(formats)
+  try {
+    await loadWasmReader()
+    return new WasmFrameDetector(formats)
+  } catch {
+    return new ZxingFrameDetector(formats)
+  }
 }
 
 export type { ImageBarcode }
 
 let worker: Worker | null = null
 let jobId = 0
-const pending = new Map<number, { resolve: (c: ImageBarcode[]) => void; reject: (e: Error) => void }>()
+interface Pending {
+  resolve: (c: ImageBarcode[]) => void
+  reject: (e: Error) => void
+  partial?: (c: ImageBarcode[]) => void
+}
+const pending = new Map<number, Pending>()
 
 function scanWorker(): Worker | null {
   if (worker) return worker
   try {
     worker = new Worker(new URL('./barcodeWorker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (e: MessageEvent<{ id: number; codes?: ImageBarcode[]; error?: string }>) => {
+    worker.onmessage = (e: MessageEvent<WorkerReply>) => {
       const job = pending.get(e.data.id)
-      pending.delete(e.data.id)
       if (!job) return
+      if (e.data.codes && !e.data.done) {
+        job.partial?.(e.data.codes)
+        return
+      }
+      pending.delete(e.data.id)
       if (e.data.codes) job.resolve(e.data.codes)
       else job.reject(new Error(e.data.error))
     }
@@ -157,13 +199,20 @@ function scanWorker(): Worker | null {
 }
 
 /** Runs the band scan off the main thread so the UI and OCR keep going. */
-function scanOffThread(lum: Uint8ClampedArray, w: number, h: number, opts: ScanOptions): Promise<ImageBarcode[]> {
+function scanOffThread(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  opts: WorkerJob['opts'],
+  partial?: (c: ImageBarcode[]) => void,
+): Promise<ImageBarcode[]> {
   const wk = scanWorker()
-  if (!wk) return Promise.resolve(scanImage(lum, w, h, opts))
+  if (!wk) return Promise.resolve(scanImage(rgbaToLuminance(rgba, w, h), w, h, opts))
   const id = ++jobId
+  const job: WorkerJob = { id, rgba, w, h, opts }
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
-    wk.postMessage({ id, lum, w, h, opts }, [lum.buffer])
+    pending.set(id, { resolve, reject, partial })
+    wk.postMessage(job, [rgba.buffer])
   })
 }
 
@@ -175,6 +224,8 @@ export async function detectBarcodesInImage(
   canvas: HTMLCanvasElement,
   formats: BarcodeFormatName[],
   nearTap = false,
+  /** Called with everything found so far, while slower passes still run. */
+  onProgress?: (codes: ImageBarcode[]) => void,
 ): Promise<ImageBarcode[]> {
   const found = new Map<string, ImageBarcode>()
   const Native = nativeCtor()
@@ -201,13 +252,20 @@ export async function detectBarcodesInImage(
   // and it is the only engine in browsers without BarcodeDetector (Brave, iOS)
   const { width: w, height: h } = canvas
   const rgba = canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, w, h).data
-  const codes = await scanOffThread(rgbaToLuminance(rgba, w, h), w, h, {
+  const codes = await scanOffThread(rgba, w, h, {
     formats,
     minLength: scanConfig.minLength,
     sharpened: true,
     sideways: !nearTap,
     bandFraction: nearTap ? 1 / 5 : 1 / 12,
-  })
-  for (const c of codes) if (!found.has(c.value)) found.set(c.value, c)
-  return [...found.values()]
+    // the tap crop is enlarged already
+    upscaleTiles: !nearTap,
+    exhaustive: nearTap,
+  }, (partial) => onProgress?.(merge(partial)))
+  return merge(codes)
+
+  function merge(more: ImageBarcode[]) {
+    for (const c of more) if (!found.has(c.value)) found.set(c.value, c)
+    return [...found.values()]
+  }
 }

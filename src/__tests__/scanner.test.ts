@@ -4,6 +4,7 @@ import { elementRectToVideo } from '../scanner/geometry'
 import { pickCandidate } from '../scanner/pick'
 import { rotate90, scanImage, sharpen } from '../scanner/imageScan'
 import { extractSerial } from '../ocr/extract'
+import { suggestFromHistory } from '../photo/analyze'
 import { StabilityFilter } from '../scanner/stability'
 
 describe('StabilityFilter', () => {
@@ -218,5 +219,31 @@ describe('scanImage (photo barcodes)', () => {
     const lum = new Uint8ClampedArray(w * h).fill(230)
     draw(lum, w, '1', 40, 50, 100, 3)
     expect(scanImage(lum, w, h, opts)).toEqual([])
+  })
+})
+
+describe('suggestFromHistory', () => {
+  const hit = (value: string, suggested = false) => ({
+    value,
+    method: 'barcode' as const,
+    box: { x: 0, y: 0, width: 1, height: 1 },
+    suggested,
+  })
+
+  it('suggests the code shaped like earlier prefabs, not the material number', () => {
+    const out = suggestFromHistory([hit('29464710'), hit('13677741')], ['13682767', '13690706'])
+    expect(out.find((h) => h.suggested)?.value).toBe('13677741')
+  })
+
+  it('stays quiet without history or when ambiguous', () => {
+    expect(suggestFromHistory([hit('29464710'), hit('13677741')], []).some((h) => h.suggested)).toBe(false)
+    expect(
+      suggestFromHistory([hit('13677741'), hit('13677742')], ['13682767']).some((h) => h.suggested),
+    ).toBe(false)
+  })
+
+  it('keeps a suggestion that came from the label text', () => {
+    const out = suggestFromHistory([hit('29464707'), hit('13690706', true)], ['29400000'])
+    expect(out.filter((h) => h.suggested).map((h) => h.value)).toEqual(['13690706'])
   })
 })

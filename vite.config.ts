@@ -33,8 +33,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // ocr/ holds the Tesseract engine (~4 MB) and English model (~3 MB)
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,gz}'],
+        // ocr/ holds the Tesseract engine (~4 MB) and English model (~3 MB),
+        // assets/ the zxing-cpp barcode reader (~1 MB wasm)
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,gz,wasm}'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
